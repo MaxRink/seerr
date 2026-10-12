@@ -49,7 +49,7 @@ ForwardedLink.displayName = 'ForwardedLink';
 
 const UserDropdown = () => {
   const intl = useIntl();
-  const { user, revalidate, hasPermission } = useUser();
+  const { user, hasPermission } = useUser();
 
   const logout = async () => {
     const cleanUpPushSubscription = async () => {
@@ -87,7 +87,7 @@ const UserDropdown = () => {
     const response = await axios.post('/api/v1/auth/logout');
 
     if (response.data?.status === 'ok') {
-      revalidate();
+      location.href = '/login';
     }
   };
 
