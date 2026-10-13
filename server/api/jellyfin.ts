@@ -144,6 +144,39 @@ class JellyfinAPI extends ExternalAPI {
   private userId?: string;
   private mediaServerType: MediaServerType;
 
+  private async resolvedUserId(): Promise<string> {
+    const isGuid = (value: string) =>
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ||
+      /^[0-9a-f]{32}$/i.test(value);
+    const normalizeGuid = (value: string) => {
+      if (value.includes('-')) {
+        return value;
+      }
+
+      return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(
+        12,
+        16
+      )}-${value.slice(16, 20)}-${value.slice(20)}`;
+    };
+
+    if (this.userId) {
+      if (isGuid(this.userId)) {
+        this.userId = normalizeGuid(this.userId);
+        return this.userId;
+      }
+
+      throw new ApiError(502, ApiErrorCode.InvalidAuthToken);
+    }
+
+    const response = await this.get<JellyfinUserResponse>('/Users/Me');
+    if (!isGuid(response.Id)) {
+      throw new ApiError(502, ApiErrorCode.InvalidAuthToken);
+    }
+
+    this.userId = normalizeGuid(response.Id);
+    return this.userId;
+  }
+
   constructor(
     jellyfinHost: string,
     authToken?: string | null,
@@ -448,8 +481,14 @@ class JellyfinAPI extends ExternalAPI {
 
   public async getLibraryContents(id: string): Promise<JellyfinLibraryItem[]> {
     try {
+      const userId =
+        this.mediaServerType === MediaServerType.JELLYFIN
+          ? await this.resolvedUserId()
+          : undefined;
       const libraryItemsResponse = await this.get<any>(
-        `/Items?SortBy=SortName&SortOrder=Ascending&IncludeItemTypes=Series,Movie,Others&Recursive=true&StartIndex=0&ParentId=${id}&collapseBoxSetItems=false`
+        `/Items?SortBy=SortName&SortOrder=Ascending&IncludeItemTypes=Series,Movie,Others&Recursive=true&StartIndex=0&ParentId=${id}&collapseBoxSetItems=false${
+          userId ? `&userId=${encodeURIComponent(userId)}` : ''
+        }`
       );
 
       return libraryItemsResponse.Items.filter(
@@ -502,10 +541,15 @@ class JellyfinAPI extends ExternalAPI {
     id: string
   ): Promise<JellyfinLibraryItemExtended | undefined> {
     try {
+      const userId =
+        this.mediaServerType === MediaServerType.JELLYFIN
+          ? await this.resolvedUserId()
+          : undefined;
       const itemResponse = await this.get<JellyfinItemsReponse>(`/Items`, {
         params: {
           ids: id,
           fields: 'ProviderIds,MediaSources,Width,Height,IsHD,DateCreated',
+          ...(userId && { userId }),
         },
       });
 
@@ -531,7 +575,13 @@ class JellyfinAPI extends ExternalAPI {
 
   public async getSeasons(seriesID: string): Promise<JellyfinLibraryItem[]> {
     try {
-      const seasonResponse = await this.get<any>(`/Shows/${seriesID}/Seasons`);
+      const userId =
+        this.mediaServerType === MediaServerType.JELLYFIN
+          ? await this.resolvedUserId()
+          : undefined;
+      const seasonResponse = await this.get<any>(`/Shows/${seriesID}/Seasons`, {
+        params: userId ? { userId } : undefined,
+      });
 
       return seasonResponse.Items;
     } catch (e) {
@@ -556,11 +606,16 @@ class JellyfinAPI extends ExternalAPI {
     options?: T
   ): Promise<EpisodeReturn<T>> {
     try {
+      const userId =
+        this.mediaServerType === MediaServerType.JELLYFIN
+          ? await this.resolvedUserId()
+          : undefined;
       const episodeResponse = await this.get<any>(
         `/Shows/${seriesID}/Episodes`,
         {
           params: {
             seasonId: seasonID,
+            ...(userId && { userId }),
             ...(options?.includeMediaInfo && { fields: 'MediaSources' }),
           },
         }
