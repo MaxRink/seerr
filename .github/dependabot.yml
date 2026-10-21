@@ -1,0 +1,65 @@
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      routine-updates:
+        patterns:
+        - '*'
+        update-types:
+        - minor
+        - patch
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      routine-updates:
+        patterns:
+        - '*'
+        update-types:
+        - minor
+        - patch
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      routine-updates:
+        patterns:
+        - '*'
+        update-types:
+        - minor
+        - patch
+  - package-ecosystem: helm
+    directory: /charts/seerr-chart
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      routine-updates:
+        patterns:
+        - '*'
+        update-types:
+        - minor
+        - patch
+  - package-ecosystem: npm
+    directories:
+    - /
+    - /bin/duplicate-detector
+    - /gen-docs
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      routine-updates:
+        patterns:
+        - '*'
+        update-types:
+        - minor
+        - patch
