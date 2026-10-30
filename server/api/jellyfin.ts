@@ -314,6 +314,14 @@ class JellyfinAPI extends ExternalAPI {
     return;
   }
 
+  // Jellyfin resolves an empty user GUID on user-library reads without a
+  // userId, so pass the configured user. Emby does not take this parameter.
+  private get userIdParams(): { userId?: string } {
+    return this.mediaServerType === MediaServerType.JELLYFIN && this.userId
+      ? { userId: this.userId }
+      : {};
+  }
+
   public async getSystemInfo(): Promise<any> {
     try {
       const systemInfoResponse = await this.get<any>('/System/Info');
@@ -449,7 +457,8 @@ class JellyfinAPI extends ExternalAPI {
   public async getLibraryContents(id: string): Promise<JellyfinLibraryItem[]> {
     try {
       const libraryItemsResponse = await this.get<any>(
-        `/Items?SortBy=SortName&SortOrder=Ascending&IncludeItemTypes=Series,Movie,Others&Recursive=true&StartIndex=0&ParentId=${id}&collapseBoxSetItems=false`
+        `/Items?SortBy=SortName&SortOrder=Ascending&IncludeItemTypes=Series,Movie,Others&Recursive=true&StartIndex=0&ParentId=${id}&collapseBoxSetItems=false`,
+        { params: this.userIdParams }
       );
 
       return libraryItemsResponse.Items.filter(
@@ -506,6 +515,7 @@ class JellyfinAPI extends ExternalAPI {
         params: {
           ids: id,
           fields: 'ProviderIds,MediaSources,Width,Height,IsHD,DateCreated',
+          ...this.userIdParams,
         },
       });
 
@@ -531,7 +541,9 @@ class JellyfinAPI extends ExternalAPI {
 
   public async getSeasons(seriesID: string): Promise<JellyfinLibraryItem[]> {
     try {
-      const seasonResponse = await this.get<any>(`/Shows/${seriesID}/Seasons`);
+      const seasonResponse = await this.get<any>(`/Shows/${seriesID}/Seasons`, {
+        params: this.userIdParams,
+      });
 
       return seasonResponse.Items;
     } catch (e) {
@@ -561,6 +573,7 @@ class JellyfinAPI extends ExternalAPI {
         {
           params: {
             seasonId: seasonID,
+            ...this.userIdParams,
             ...(options?.includeMediaInfo && { fields: 'MediaSources' }),
           },
         }
