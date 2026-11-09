@@ -10,6 +10,7 @@ export enum ApiErrorCode {
   OidcAuthorizationFailed = 'OIDC_AUTHORIZATION_FAILED',
   OidcMissingEmail = 'OIDC_MISSING_EMAIL',
   OidcAccountAlreadyLinked = 'OIDC_ACCOUNT_ALREADY_LINKED',
+  OidcNoMatchingAccount = 'OIDC_NO_MATCHING_ACCOUNT',
   SyncErrorGroupedFolders = 'SYNC_ERROR_GROUPED_FOLDERS',
   SyncErrorNoLibraries = 'SYNC_ERROR_NO_LIBRARIES',
   Unauthorized = 'UNAUTHORIZED',

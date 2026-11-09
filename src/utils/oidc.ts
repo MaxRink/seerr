@@ -14,6 +14,8 @@ const messages = defineMessages('utils.oidc', {
   oidcUnauthorized: 'You do not have permission to sign in with {provider}.',
   oidcAccountAlreadyLinked:
     'This {provider} account is already linked to another user.',
+  oidcNoMatchingAccount:
+    'No Seerr account matches your {provider} login yet. Sign in with Jellyfin once and link {provider} under Profile > Settings > Linked Accounts, or ask an administrator.',
 });
 
 const OIDC_PROVIDER_KEY = 'oidc-provider';
@@ -33,6 +35,8 @@ export function getOidcErrorMessage(
       return intl.formatMessage(messages.oidcMissingEmail, values);
     case ApiErrorCode.OidcAccountAlreadyLinked:
       return intl.formatMessage(messages.oidcAccountAlreadyLinked, values);
+    case ApiErrorCode.OidcNoMatchingAccount:
+      return intl.formatMessage(messages.oidcNoMatchingAccount, values);
     case ApiErrorCode.Unauthorized:
       return intl.formatMessage(messages.oidcUnauthorized, values);
     default:

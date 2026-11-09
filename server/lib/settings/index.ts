@@ -71,6 +71,12 @@ export type OidcProvider = {
   requiredClaims?: string;
   scopes?: string;
   newUserLogin?: boolean;
+  /** Link first-time logins to the Jellyfin user of the same name (fork). */
+  autoOnboardJellyfin?: boolean;
+  /** Groups claim values allowed to auto-onboard; default ["users"]. */
+  autoOnboardGroups?: string[];
+  /** preferred_username -> Jellyfin user name, SSO-Auth plugin semantics. */
+  jellyfinUsernameMap?: Record<string, string>;
 };
 
 export type PublicOidcProvider = Pick<OidcProvider, 'slug' | 'name' | 'logo'>;

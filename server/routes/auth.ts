@@ -7,6 +7,10 @@ import { getRepository } from '@server/datasource';
 import { LinkedAccount } from '@server/entity/LinkedAccount';
 import { User } from '@server/entity/User';
 import { startJobs } from '@server/job/schedule';
+import {
+  autoOnboardJellyfin,
+  type OnboardResult,
+} from '@server/lib/oidcJellyfinOnboard';
 import { Permission } from '@server/lib/permissions';
 import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
@@ -1204,6 +1208,39 @@ authRoutes.post(
       return res.sendStatus(204);
     }
 
+    // Fork: link a first-time identity to its Jellyfin account (opt-in)
+    if (!user && provider.autoOnboardJellyfin) {
+      let result: OnboardResult;
+      try {
+        result = await autoOnboardJellyfin(provider, fullUserInfo);
+      } catch (error) {
+        logger.error('OIDC Jellyfin auto-onboarding failed', {
+          label: 'Auth',
+          provider: provider.slug,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+        result = { type: 'skip', reason: 'Jellyfin lookup failed' };
+      }
+      if (result.type === 'refused') {
+        logger.warn('Refused OIDC Jellyfin auto-onboarding', {
+          label: 'Auth',
+          provider: provider.slug,
+          ip: req.ip,
+          cause: result.reason,
+        });
+        return next({ status: result.status, error: result.error });
+      }
+      if (result.type === 'linked') {
+        user = result.user;
+      } else {
+        logger.info('OIDC Jellyfin auto-onboarding skipped', {
+          label: 'Auth',
+          provider: provider.slug,
+          cause: result.reason,
+        });
+      }
+    }
+
     // Create user if one doesn't already exist
     if (!user && fullUserInfo.email != null && provider.newUserLogin) {
       const normalizedEmail = fullUserInfo.email.trim().toLowerCase();
@@ -1259,7 +1296,9 @@ authRoutes.post(
         status: provider.newUserLogin ? 400 : 403,
         error: provider.newUserLogin
           ? ApiErrorCode.OidcMissingEmail
-          : ApiErrorCode.Unauthorized,
+          : provider.autoOnboardJellyfin
+            ? ApiErrorCode.OidcNoMatchingAccount
+            : ApiErrorCode.Unauthorized,
       });
     }
 

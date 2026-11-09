@@ -18,6 +18,8 @@ import { LinkedAccount } from '@server/entity/LinkedAccount';
 import { User } from '@server/entity/User';
 import PreparedEmail from '@server/lib/email';
 import ImageProxy from '@server/lib/imageproxy';
+import { resolveJellyfinUsername } from '@server/lib/oidcJellyfinOnboard';
+import { Permission } from '@server/lib/permissions';
 import { getSettings } from '@server/lib/settings';
 import { checkUser } from '@server/middleware/auth';
 import { setupTestDb } from '@server/test/db';
@@ -1356,6 +1358,276 @@ describe('OpenID Connect', () => {
         response.body.error,
         ApiErrorCode.OidcAuthorizationFailed
       );
+    });
+  });
+
+  describe('Jellyfin auto-onboarding (fork)', function () {
+    const JF = {
+      alice: '0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a',
+      jfonly: '0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b',
+      admin: '0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c',
+      disabled: '0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d',
+    };
+    const JF_USERS = [
+      { Id: JF.alice, Name: 'Alice', Policy: { IsAdministrator: false } },
+      { Id: JF.jfonly, Name: 'JfOnly', Policy: { IsAdministrator: false } },
+      { Id: JF.admin, Name: 'admin', Policy: { IsAdministrator: true } },
+      {
+        Id: JF.disabled,
+        Name: 'Gone',
+        Policy: { IsAdministrator: false, IsDisabled: true },
+      },
+    ];
+    let getUsersMock: ReturnType<typeof mock.method>;
+    let previousServerType: MediaServerType;
+
+    const claimsFor = (
+      username: string,
+      extra: Record<string, unknown> = {}
+    ) => ({
+      sub: `sub-${username}`,
+      email: `${username}@example.com`,
+      email_verified: true,
+      preferred_username: username,
+      groups: ['users'],
+      ...extra,
+    });
+
+    async function loginAs(
+      username: string,
+      extra: Record<string, unknown> = {}
+    ) {
+      const claims = claimsFor(username, extra);
+      await setupFetchMock({
+        supportsPKCE: true,
+        idTokenClaims: { sub: claims.sub, email: claims.email },
+        userinfoResponse: claims,
+      });
+      return performOidcCallback();
+    }
+
+    async function seerrJellyfinUser(
+      name: string,
+      jellyfinUserId: string,
+      permissions = Permission.REQUEST
+    ) {
+      return getRepository(User).save(
+        new User({
+          email: `${name.toLowerCase()}@jellyfin.local`,
+          username: name,
+          jellyfinUsername: name,
+          jellyfinUserId,
+          permissions,
+          userType: UserType.JELLYFIN,
+          avatar: '',
+        })
+      );
+    }
+
+    const linksOf = (userId: number) =>
+      getRepository(LinkedAccount).find({
+        where: { user: { id: userId } },
+      });
+
+    before(() => {
+      getUsersMock = mock.method(
+        JellyfinAPI.prototype,
+        'getUsers',
+        async () => ({ users: JF_USERS })
+      );
+    });
+
+    after(() => {
+      getUsersMock.mock.restore();
+    });
+
+    beforeEach(() => {
+      const settings = getSettings();
+      previousServerType = settings.main.mediaServerType;
+      settings.main.mediaServerType = MediaServerType.JELLYFIN;
+      settings.main.defaultPermissions = Permission.REQUEST;
+      Object.assign(settings.oidc.providers[0], {
+        newUserLogin: false,
+        autoOnboardJellyfin: true,
+        autoOnboardGroups: undefined,
+        jellyfinUsernameMap: undefined,
+      });
+      getUsersMock.mock.resetCalls();
+    });
+
+    afterEach(() => {
+      getSettings().main.mediaServerType = previousServerType;
+      fetchMock.hardReset();
+    });
+
+    it('maps usernames like the Jellyfin SSO plugin', function () {
+      assert.deepStrictEqual(
+        resolveJellyfinUsername('MAX', { ' max ': ' admin ' }),
+        { name: 'admin', mapped: true }
+      );
+      assert.deepStrictEqual(resolveJellyfinUsername('max', { max: ' ' }), {
+        name: 'max',
+        mapped: false,
+      });
+      assert.deepStrictEqual(resolveJellyfinUsername('bob', undefined), {
+        name: 'bob',
+        mapped: false,
+      });
+    });
+
+    it('links an existing Seerr Jellyfin user by case-insensitive name', async function () {
+      const alice = await seerrJellyfinUser('Alice', JF.alice);
+      const response = await loginAs('alice');
+      assert.strictEqual(response.status, 204);
+      const links = await linksOf(alice.id);
+      assert.strictEqual(links.length, 1);
+      assert.strictEqual(links[0].sub, 'sub-alice');
+      assert.strictEqual(links[0].provider, 'test');
+    });
+
+    it('imports a Jellyfin-only user with default permissions', async function () {
+      const response = await loginAs('jfonly');
+      assert.strictEqual(response.status, 204);
+      const user = await getRepository(User).findOneOrFail({
+        where: { jellyfinUserId: JF.jfonly },
+      });
+      assert.strictEqual(user.userType, UserType.JELLYFIN);
+      assert.strictEqual(user.jellyfinUsername, 'JfOnly');
+      assert.strictEqual(user.permissions, Permission.REQUEST);
+      assert.strictEqual((await linksOf(user.id))[0].sub, 'sub-jfonly');
+    });
+
+    it('links a Seerr administrator only when the username map lists it', async function () {
+      const admin = await seerrJellyfinUser(
+        'admin',
+        JF.admin,
+        Permission.ADMIN
+      );
+      getSettings().oidc.providers[0].jellyfinUsernameMap = {
+        owner: 'admin',
+      };
+      const response = await loginAs('owner');
+      assert.strictEqual(response.status, 204);
+      assert.strictEqual((await linksOf(admin.id))[0].sub, 'sub-owner');
+    });
+
+    it('refuses an unmapped Seerr administrator', async function () {
+      const admin = await seerrJellyfinUser(
+        'admin',
+        JF.admin,
+        Permission.ADMIN
+      );
+      const response = await loginAs('admin');
+      assert.strictEqual(response.status, 403);
+      assert.strictEqual(response.body.error, ApiErrorCode.Unauthorized);
+      assert.strictEqual((await linksOf(admin.id)).length, 0);
+    });
+
+    it('refuses a name match when the user is linked to another identity', async function () {
+      const alice = await seerrJellyfinUser('Alice', JF.alice);
+      await getRepository(LinkedAccount).save(
+        new LinkedAccount({
+          user: alice,
+          provider: 'test',
+          sub: 'someone-else',
+          username: 'someone',
+        })
+      );
+      const response = await loginAs('alice');
+      assert.strictEqual(response.status, 409);
+      assert.strictEqual(
+        response.body.error,
+        ApiErrorCode.OidcAccountAlreadyLinked
+      );
+      assert.strictEqual((await linksOf(alice.id)).length, 1);
+    });
+
+    it('lets explicitly mapped identities share one account', async function () {
+      const admin = await seerrJellyfinUser(
+        'admin',
+        JF.admin,
+        Permission.ADMIN
+      );
+      getSettings().oidc.providers[0].jellyfinUsernameMap = {
+        owner: 'admin',
+        admin: 'admin',
+      };
+      assert.strictEqual((await loginAs('admin')).status, 204);
+      fetchMock.hardReset();
+      assert.strictEqual((await loginAs('owner')).status, 204);
+      assert.strictEqual((await linksOf(admin.id)).length, 2);
+    });
+
+    it('skips users outside the auto-onboarding groups', async function () {
+      const alice = await seerrJellyfinUser('Alice', JF.alice);
+      const response = await loginAs('alice', { groups: ['vpn-users'] });
+      assert.strictEqual(response.status, 403);
+      assert.strictEqual(
+        response.body.error,
+        ApiErrorCode.OidcNoMatchingAccount
+      );
+      assert.strictEqual((await linksOf(alice.id)).length, 0);
+      assert.strictEqual(getUsersMock.mock.callCount(), 0);
+    });
+
+    it('honours a custom group gate', async function () {
+      await seerrJellyfinUser('Alice', JF.alice);
+      getSettings().oidc.providers[0].autoOnboardGroups = ['media'];
+      assert.strictEqual(
+        (await loginAs('alice', { groups: ['media'] })).status,
+        204
+      );
+    });
+
+    it('skips logins without a verified e-mail', async function () {
+      const alice = await seerrJellyfinUser('Alice', JF.alice);
+      const response = await loginAs('alice', { email_verified: false });
+      assert.strictEqual(response.status, 403);
+      assert.strictEqual((await linksOf(alice.id)).length, 0);
+    });
+
+    it('falls back to 403 when no Jellyfin user matches', async function () {
+      const response = await loginAs('nobody');
+      assert.strictEqual(response.status, 403);
+      assert.strictEqual(
+        response.body.error,
+        ApiErrorCode.OidcNoMatchingAccount
+      );
+      assert.strictEqual(getUsersMock.mock.callCount(), 1);
+      assert.strictEqual(
+        await getRepository(User).count({ where: { email: 'nobody' } }),
+        0
+      );
+    });
+
+    it('ignores disabled Jellyfin users', async function () {
+      const response = await loginAs('gone');
+      assert.strictEqual(response.status, 403);
+      assert.strictEqual(
+        await getRepository(User).count({
+          where: { jellyfinUserId: JF.disabled },
+        }),
+        0
+      );
+    });
+
+    it('never matches by e-mail', async function () {
+      const alice = await seerrJellyfinUser('Alice', JF.alice);
+      const response = await loginAs('mallory', {
+        email: 'alice@jellyfin.local',
+      });
+      assert.strictEqual(response.status, 403);
+      assert.strictEqual((await linksOf(alice.id)).length, 0);
+    });
+
+    it('keeps upstream behaviour when the flag is off', async function () {
+      const alice = await seerrJellyfinUser('Alice', JF.alice);
+      getSettings().oidc.providers[0].autoOnboardJellyfin = false;
+      const response = await loginAs('alice');
+      assert.strictEqual(response.status, 403);
+      assert.strictEqual(response.body.error, ApiErrorCode.Unauthorized);
+      assert.strictEqual((await linksOf(alice.id)).length, 0);
+      assert.strictEqual(getUsersMock.mock.callCount(), 0);
     });
   });
 });

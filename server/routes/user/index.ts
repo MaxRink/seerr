@@ -2,7 +2,6 @@ import JellyfinAPI from '@server/api/jellyfin';
 import PlexTvAPI from '@server/api/plextv';
 import TautulliAPI from '@server/api/tautulli';
 import { MediaType } from '@server/constants/media';
-import { MediaServerType } from '@server/constants/server';
 import { UserType } from '@server/constants/user';
 import dataSource, { getRepository } from '@server/datasource';
 import Media from '@server/entity/Media';
@@ -17,6 +16,7 @@ import type {
   UserResultsResponse,
   UserWatchDataResponse,
 } from '@server/interfaces/api/userInterfaces';
+import { buildImportedJellyfinUser } from '@server/lib/oidcJellyfinOnboard';
 import { Permission, hasPermission } from '@server/lib/permissions';
 import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
@@ -774,21 +774,8 @@ router.post(
           where: { jellyfinUserId: jellyfinUserId },
         });
 
-        if (!user) {
-          const newUser = new User({
-            jellyfinUsername: jellyfinUser?.Name,
-            jellyfinUserId: jellyfinUser?.Id,
-            jellyfinDeviceId: Buffer.from(
-              `BOT_seerr_${jellyfinUser?.Name ?? ''}`
-            ).toString('base64'),
-            email: jellyfinUser?.Name,
-            permissions: settings.main.defaultPermissions,
-            avatar: `/avatarproxy/${jellyfinUser?.Id}`,
-            userType:
-              settings.main.mediaServerType === MediaServerType.JELLYFIN
-                ? UserType.JELLYFIN
-                : UserType.EMBY,
-          });
+        if (!user && jellyfinUser) {
+          const newUser = buildImportedJellyfinUser(jellyfinUser);
 
           await userRepository.save(newUser);
           createdUsers.push(newUser);
